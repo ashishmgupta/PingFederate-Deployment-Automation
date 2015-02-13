@@ -37,6 +37,15 @@ $pingfederaterootfolder
 $pingfederaterootfolder = $pingfedexeexactlocation.Directory.Parent.Parent.FullName
 $pingfederaterootfolder
 
+"############# Backing up the folder ##################"
+$pingfederaterootfolderparent = $pingfedexeexactlocation.Directory.Parent.Parent.Parent.FullName
+$pingfederatebackupfoldername =  "PF_"+ $(get-date -f MM-dd-yyyy_HH_mm_ss) 
+$pingfederatebackupfolderfullpath = $pingfederaterootfolderparent + $pingfederatebackupfoldername 
+Write-Host "$($pingfederaterootfolder) getting backed up to $($pingfederatebackupfolderfullpath)"
+# $pingfederatebackupfolder = $pingfederaterootfolder +"_"+ $(get-date -f MM-dd-yyyy_HH_mm_ss) 
+ robocopy $pingfederaterootfolder $pingfederatebackupfolderfullpath /E
+"############# Backup completed ##################"
+
 "############## PingFederate 'server' folder path ##############"
 $pingfederateserverfolder = Join-Path $pingfederaterootfolder server
 $pingfederateserverfolder
