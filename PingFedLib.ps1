@@ -1,4 +1,4 @@
-﻿add-type @"
+add-type @"
     using System.Net;
     using System.Security.Cryptography.X509Certificates;
     public class TrustAllCertsPolicy : ICertificatePolicy {
@@ -10,6 +10,7 @@
     }
 "@
 
+Add-Type -AssemblyName System.IO.Compression.FileSystem
 
 function GetMachineFQDN
 {
@@ -119,17 +120,117 @@ engine) from a clustering standpoint.
 function GetPingFederateOperationalMode
 {
     $runPropertiesPath = $args[0]
-    $runPropertiesContents = Get-Content $runPropertiesPath | Where { $_ -match "^pf.operational.mode=" -and $_.trim() -ne "" }
+    $runPropertiesEntryForOperationalMode = Get-Content $runPropertiesPath | Where { $_ -match "^pf.operational.mode=" -and $_.trim() -ne "" }
     # $runPropertiesContents
     $serverMode = ""
     # $runPropertiesContents.Length
-    if ($runPropertiesContents.Length -gt 0 )
+    if ($runPropertiesEntryForOperationalMode.Length -gt 0 )
     {
-        $serverMode = $runPropertiesContents.Split("=")[1]
+        $serverMode = $runPropertiesEntryForOperationalMode.Split("=")[1]
     }
     return $serverMode
     # $hashTable = convertfrom-stringdata -stringdata $runPropertiesContents
     # $hashTable[0]
+}
+
+
+function ZipPingFederateLogFiles {
+	$pingFedLogsFolder = $args[0]
+	$pingFedLogsFolder
+	$machineFQDN = GetMachineFQDN
+	$zipFilePath = $pingFedLogsFolder+'/'+$machineFQDN+$(get-date -f MM-dd-yyyy_HH_mm_ss)+'.zip'
+	$zipFilePath 
+	# $zipFileName = $(get-date -f MM-dd-yyyy_HH_mm_ss) +'.zip'
+	# $zipFilePath = JOIN-PATH $pingFedLogsFolder $machineFQDN $zipFileName
+	# $zipFilePath = JOIN-PATH $pingFedLogsFolder $zipFileName
+	$logFilesFilter = $pingFedLogsFolder +'/server*.log*'
+	# ls $logFilesFilter | ZipFiles $zipFilePath
+	New-Zipfile $zipFilePath $logFilesFilter
+	# c:/pingfederate_logs/CHLCNU403B80D.CORP.LPL.COM09-11-2015_12_37_15.zip
+}
+
+function ZipFiles { 
+  Param([string]$path) 
+
+  if (-not $path.EndsWith('.zip')) {$path += '.zip'} 
+
+  if (-not (test-path $path)) { 
+    set-content $path ("PK" + [char]5 + [char]6 + ("$([char]0)" * 18)) 
+  } 
+  $path
+  $ZipFile = (new-object -com shell.application).NameSpace($path) 
+  $input | foreach {$zipfile.CopyHere($_.fullname)} 
+} 
+
+
+function New-ZipFile {
+	#.Synopsis
+	#  Create a new zip file, optionally appending to an existing zip...
+	[CmdletBinding()]
+	param(
+		# The path of the zip to create
+		[Parameter(Position=0, Mandatory=$true)]
+		$ZipFilePath,
+ 
+		# Items that we want to add to the ZipFile
+		[Parameter(Position=1, Mandatory=$true, ValueFromPipelineByPropertyName=$true)]
+		[Alias("PSPath","Item")]
+		[string[]]$InputObject = $Pwd,
+ 
+		# Append to an existing zip file, instead of overwriting it
+		[Switch]$Append,
+ 
+		# The compression level (defaults to Optimal):
+		#   Optimal - The compression operation should be optimally compressed, even if the operation takes a longer time to complete.
+		#   Fastest - The compression operation should complete as quickly as possible, even if the resulting file is not optimally compressed.
+		#   NoCompression - No compression should be performed on the file.
+		[System.IO.Compression.CompressionLevel]$Compression = "Optimal"
+	)
+	begin {
+		# Make sure the folder already exists
+		[string]$File = Split-Path $ZipFilePath -Leaf
+		[string]$Folder = $(if($Folder = Split-Path $ZipFilePath) { Resolve-Path $Folder } else { $Pwd })
+		$ZipFilePath = Join-Path $Folder $File
+		# If they don't want to append, make sure the zip file doesn't already exist.
+		if(!$Append) {
+			if(Test-Path $ZipFilePath) { Remove-Item $ZipFilePath }
+		}
+		$Archive = [System.IO.Compression.ZipFile]::Open( $ZipFilePath, "Update" )
+	}
+	process {
+		foreach($path in $InputObject) {
+			foreach($item in Resolve-Path $path) {
+				# Push-Location so we can use Resolve-Path -Relative
+				Push-Location (Split-Path $item)
+				# This will get the file, or all the files in the folder (recursively)
+				foreach($file in Get-ChildItem $item -Recurse -File -Force | % FullName) {
+					# Calculate the relative file path
+					$relative = (Resolve-Path $file -Relative).TrimStart(".\")
+					# Add the file to the zip
+					$null = [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($Archive, $file, $relative, $Compression)
+				}
+				Pop-Location
+			}
+		}
+	}
+	end {
+		$Archive.Dispose()
+		Get-Item $ZipFilePath
+	}
+}
+
+function GetPingFederateLogFolder
+{
+	$runPropertiesPath = $args[0]
+    $runPropertiesEntryForLogFolder = Get-Content $runPropertiesPath | Where { $_ -match "^pf.log.dir=" -and $_.trim() -ne "" }
+    # $runPropertiesContents
+    $logFolderPath = ""
+    # $runPropertiesContents.Length
+    if ($runPropertiesEntryForLogFolder.Length -gt 0 )
+    {
+        $logFolderPath = $runPropertiesEntryForLogFolder.Split("=")[1]
+    }
+    return $logFolderPath
 }
 
 <#
@@ -170,111 +271,3 @@ switch ($PingFedOperationalMode){
      }
 
 }
-Set-ExecutionPolicy Unrestricted
-
-Set-Location $PSScriptRoot
-
-
-$backupFolderPathPrefix = "Backup"
-$deploysourceserverfolderlocation = Join-Path $PSScriptRoot server
-$deploysourceserverfolderlocation
-
-"############## Looking for PingFederate service ############"
-$pingfederateserviceexecutablepath
-$pingfederateserviceexecutablepath = gwmi win32_service|?{$_.name -like "pingfederate*"}|select pathname
-$pingfederateservicename = gwmi win32_service|?{$_.name -like "pingfederate*"}|select displayname
-
-
-
-
-
-if(!$pingfederateserviceexecutablepath) { throw "PingFederate service IS NOT installed on this machine. Script will not continue!"} else {"PingFederate service IS installed on this machine. Proceeding..."}
-
-"############## Stopping PingFederate Service. ##############"
-$pingfederateservicename
-Stop-Service -displayname $pingfederateservicename.displayname
-"############## PingFederate Service Stopped. ##############"
-
-$pos = $pingfederateserviceexecutablepath.pathname.IndexOf(" -s ")
-$pingfederateserviceexecutablepathstring = $pingfederateserviceexecutablepath.pathname.Substring(0, $pos)
-
-
-"############## PingFederate service - Path to executable with -s onwards removed ##############"
-$pingfederateserviceexecutablepathstring = $pingfederateserviceexecutablepathstring.Replace("`"","")
-$pingfederateserviceexecutablepathstring
-
-
-$pingfedexeexactlocation
-$pingfedexeexactlocation = Get-Item $pingfederateserviceexecutablepathstring | Select-Object Directory
-
-"############## PingFederate root folder ############## "
-$pingfederaterootfolder
-$pingfederaterootfolder = $pingfedexeexactlocation.Directory.Parent.Parent.FullName
-$pingfederaterootfolder
-
-
-"############## PingFederate 'server' folder path ##############"
-$pingfederateserverfolder = Join-Path $pingfederaterootfolder server
-$pingfederateserverfolder
-
-
-
-$backupPath = Join-Path $backupFolderPathPrefix $(get-date -f MM-dd-yyyy_HH_mm_ss) 
-"############## Copying the server folder to a backup folder "+$backupPath+" ##############"
-copy-item $pingfederateserverfolder -destination $backuppath -recurse
-"############## Copy complete to backup folder "+$backupPath+" ##############"
-
-"############## PingFederate 'default' folder path ############## "
-$pingfederatedefaultfolder = Join-Path $pingfederateserverfolder default
-$pingfederatedefaultfolder
-
-"############## PingFederate 'deploy' folder path ############## "
-$pingfederatedeployfolder = Join-Path $pingfederatedefaultfolder deploy
-$pingfederatedeployfolder
-
-Set-Location $pingfederatedeployfolder
-
-"############## Getting all the existing lpl*.jar files to be deleted ############## "
-Get-ChildItem $pingfederatedeployfolder -name -filter lpl*.jar
-"############## Getting all the existing sce*.jar files to be deleted"
-Get-ChildItem $pingfederatedeployfolder -name -filter sce*.jar
-
-"############## Removing all the existing lpl*.jar ##############"
-remove-item $pingfederatedeployfolder\* -include lpl*.jar -recurse -force
-"############## Removing all the existing sce*.jar ##############"
-remove-item $pingfederatedeployfolder\* -include sce*.jar -recurse -force
-
-"############## All lpl*.jar and sce*.jar files deleted ##############"
-
-Write-Host "$($deploysourceserverfolderlocation) deploying to $($pingfederateserverfolder)"
-
-Copy-Item -Path $deploysourceserverfolderlocation $pingfederaterootfolder -recurse -force
-"############## Getting all the deployed lpl*.jar ##############"
-Get-ChildItem $pingfederatedeployfolder -name -filter lpl*.jar
-"############## Getting all the deployed sce*.jar ##############"
-Get-ChildItem $pingfederatedeployfolder -name -filter sce*.jar
-
-"############## Deployment completed ##############"
-
-"############## Starting PingFederate Service. ##############"
-$pingfederateservicename
-Start-Service -displayname $pingfederateservicename.displayname
-"############## PingFederate Service Started. ##############"
-
-$PingFedRunPropertiesFilePath = $pingfederaterootfolder + "/bin/run.properties"
-$PingFedOperationalMode = GetPingFederateOperationalMode $PingFedRunPropertiesFilePath
-CheckPingFederateStatusAfterServiceStart $PingFedOperationalMode
-
-
-
-
-<#
-$adminURL = GetPingFedAdminUrl
-$adminURL
-$heartbeatURL = GetPingFedHeartbeatUrl
-$heartbeatURL
-IsPingFederateAdminOK $adminURL
-IsPingFedHeartbeatOK $heartbeatURL
-#>
-pause
-
