@@ -3,6 +3,7 @@ Set-ExecutionPolicy Unrestricted
 
 Set-Location $PSScriptRoot
 
+$RSALogsLoacation = "d:/RSA/logs"
 
 "############## Looking for PingFederate service ############"
 $tomcatserviceexecutablepath
